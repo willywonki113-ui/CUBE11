@@ -67,6 +67,8 @@
         let hitTestSourceRequested = false;
         let reticle;
         const placedObjects = [];
+        // 초점 문제 해결을 위해 THREE.js 행렬을 사용합니다.
+        const matrix4 = new THREE.Matrix4(); 
 
         // DOM 요소 가져오기
         const arButton = document.getElementById('ar-button');
@@ -133,6 +135,11 @@
             controller = renderer.xr.getController(0);
             controller.addEventListener('select', onSelect);
             scene.add(controller);
+
+            // 6. 조명 설정 (렌더링 루프가 아닌 init에서 한 번만 추가)
+            const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+            light.position.set(0, 10, 0);
+            scene.add(light);
         }
 
         // 윈도우 리사이즈 처리
@@ -145,9 +152,10 @@
         // AR 세션 시작 버튼 클릭 핸들러
         function onARButtonClick() {
             // 세션 요청 시 필요한 AR 기능들을 정의
+            // 'camera-access' 기능을 추가하여 장치에 카메라 사용을 명확히 요청합니다.
             const sessionInit = {
                 requiredFeatures: ['hit-test', 'local'],
-                optionalFeatures: ['dom-overlay'], // 선택적으로 DOM 오버레이 사용
+                optionalFeatures: ['dom-overlay', 'camera-access'], // camera-access를 옵션으로 요청
             };
 
             // 세션 요청
@@ -218,13 +226,12 @@
                 const referenceSpace = renderer.xr.getReferenceSpace();
                 const session = renderer.xr.getSession();
 
-                // 1. 히트 테스트 소스 요청
+                // 1. 히트 테스트 소스 요청 (이전과 동일)
                 if (hitTestSourceRequested === false) {
                     if (session.requestHitTestSource) {
                         session.requestReferenceSpace({ type: 'viewer' }).then((referenceSpace) => {
                             const hitTestRequest = { space: referenceSpace };
                             
-                            // 뷰어 공간을 기준으로 화면 중앙에 레이를 생성합니다.
                             session.requestHitTestSource(hitTestRequest).then((source) => {
                                 hitTestSource = source;
                             });
@@ -241,22 +248,33 @@
                     if (hitTestResults.length > 0) {
                         const hit = hitTestResults[0];
                         
-                        // 히트 위치를 리트리클에 적용
+                        // 히트 위치를 리트리클에 적용 (표면 감지 성공)
                         const pose = hit.getPose(referenceSpace);
                         reticle.matrix.fromArray(pose.transform.matrix);
                         reticle.visible = true;
                     } else {
-                        // 히트 결과가 없으면 리트리클 숨기기
-                        reticle.visible = false;
+                        // 표면 감지 실패 시: 리트리클을 뷰어 앞에 1미터 거리에 표시합니다.
+                        const viewerPose = frame.getViewerPose(referenceSpace);
+
+                        if (viewerPose) {
+                            // 뷰어의 위치와 방향 행렬을 가져와서
+                            matrix4.fromArray(viewerPose.transform.matrix);
+                            
+                            // Z축 방향으로 1미터 앞으로 이동 (WebXR 좌표계는 -Z가 앞쪽)
+                            // Reticle의 위치를 뷰어 1m 앞에 고정
+                            matrix4.multiply(new THREE.Matrix4().makeTranslation(0, 0, -1));
+
+                            reticle.matrix.copy(matrix4);
+                            reticle.visible = true; // 항상 표시
+                        } else {
+                            // 뷰어 포즈를 얻지 못하면 숨김
+                            reticle.visible = false;
+                        }
                     }
                 }
             }
-
-            // 모든 큐브를 향해 회전하는 광원 (장면이 너무 어두워지지 않게 함)
-            const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
-            light.position.set(0, 10, 0);
-            scene.add(light);
             
+            // 조명은 이미 init에서 추가했으므로 렌더링만 수행
             renderer.render(scene, camera);
         }
 
